@@ -70,102 +70,108 @@ export function BatchCookieModal({ onClose }: BatchCookieModalProps) {
         setIsProcessing(true)
         setShowResults(true)
 
-        const initialResults: CookieResult[] = cookieLines.map(cookie => ({
-            cookie,
-            status: 'pending',
-        }))
-        setResults(initialResults)
+        try {
+            const initialResults: CookieResult[] = cookieLines.map(cookie => ({
+                cookie,
+                status: 'pending',
+            }))
+            setResults(initialResults)
 
-        // Worker Pool: 共享索引，多个 worker 并发拉取任务
-        let nextIndex = 0
-        const totalCount = cookieLines.length
+            // Worker Pool: 共享索引，多个 worker 并发拉取任务
+            let nextIndex = 0
+            const totalCount = cookieLines.length
 
-        const processOne = async () => {
-            while (true) {
-                // JS 单线程，nextIndex++ 原子安全
-                const i = nextIndex++
-                if (i >= totalCount) return
+            const processOne = async () => {
+                while (true) {
+                    // JS 单线程，nextIndex++ 原子安全
+                    const i = nextIndex++
+                    if (i >= totalCount) return
 
-                // 检查是否已取消
-                if (cancelledRef.current) {
+                    // 检查是否已取消
+                    if (cancelledRef.current) {
+                        setResults(prev => {
+                            const updated = [...prev]
+                            if (updated[i]?.status === 'pending') {
+                                updated[i] = { ...updated[i], status: 'cancelled' }
+                            }
+                            return updated
+                        })
+                        return
+                    }
+
+                    // 标记为处理中
                     setResults(prev => {
                         const updated = [...prev]
-                        if (updated[i]?.status === 'pending') {
-                            updated[i] = { ...updated[i], status: 'cancelled' }
-                        }
+                        updated[i] = { ...updated[i], status: 'processing' }
                         return updated
                     })
-                    return
-                }
 
-                // 标记为处理中
-                setResults(prev => {
-                    const updated = [...prev]
-                    updated[i] = { ...updated[i], status: 'processing' }
-                    return updated
-                })
+                    try {
+                        const { isValid, processedValue } = validateAndProcessCookie(cookieLines[i])
 
-                try {
-                    const { isValid, processedValue } = validateAndProcessCookie(cookieLines[i])
+                        if (!isValid) {
+                            setResults(prev => {
+                                const updated = [...prev]
+                                updated[i] = {
+                                    ...updated[i],
+                                    status: 'error',
+                                    error: 'Cookie 格式无效',
+                                }
+                                return updated
+                            })
+                            continue
+                        }
 
-                    if (!isValid) {
+                        const createData: AccountCreate = {
+                            cookie_value: processedValue,
+                        }
+
+                        // 批量操作跳过全局 toast 错误提示
+                        const response = await accountsApi.create(createData, { skipToast: true } as any)
+
+                        setResults(prev => {
+                            const updated = [...prev]
+                            updated[i] = {
+                                ...updated[i],
+                                status: 'success',
+                                organizationUuid: response.data.organization_uuid,
+                            }
+                            return updated
+                        })
+                    } catch (error: any) {
+                        const errorMessage = error.response?.data?.detail?.message || '添加失败'
+
                         setResults(prev => {
                             const updated = [...prev]
                             updated[i] = {
                                 ...updated[i],
                                 status: 'error',
-                                error: 'Cookie 格式无效',
+                                error: errorMessage,
                             }
                             return updated
                         })
-                        continue
                     }
-
-                    const createData: AccountCreate = {
-                        cookie_value: processedValue,
-                    }
-
-                    // 批量操作跳过全局 toast 错误提示
-                    const response = await accountsApi.create(createData, { skipToast: true } as any)
-
-                    setResults(prev => {
-                        const updated = [...prev]
-                        updated[i] = {
-                            ...updated[i],
-                            status: 'success',
-                            organizationUuid: response.data.organization_uuid,
-                        }
-                        return updated
-                    })
-                } catch (error: any) {
-                    const errorMessage = error.response?.data?.detail?.message || '添加失败'
-
-                    setResults(prev => {
-                        const updated = [...prev]
-                        updated[i] = {
-                            ...updated[i],
-                            status: 'error',
-                            error: errorMessage,
-                        }
-                        return updated
-                    })
                 }
             }
+
+            // 启动 min(concurrency, totalCount) 个 worker 并发执行
+            const workerCount = Math.min(concurrency, totalCount)
+            const workers = Array.from({ length: workerCount }, () => processOne())
+            await Promise.allSettled(workers)
+
+            // 扫尾：将剩余 pending 标记为 cancelled（取消触发时可能有遗留）
+            if (cancelledRef.current) {
+                setResults(prev =>
+                    prev.map(r => (r.status === 'pending' ? { ...r, status: 'cancelled' } : r)),
+                )
+            }
+        } catch (error) {
+            console.error('Batch cookie processing error:', error)
+            toast.error('批量处理过程中发生错误')
+        } finally {
+            // 确保无论如何都会重置处理状态
+            setIsProcessing(false)
         }
-
-        // 启动 min(concurrency, totalCount) 个 worker 并发执行
-        const workerCount = Math.min(concurrency, totalCount)
-        const workers = Array.from({ length: workerCount }, () => processOne())
-        await Promise.allSettled(workers)
-
-        // 扫尾：将剩余 pending 标记为 cancelled（取消触发时可能有遗留）
-        if (cancelledRef.current) {
-            setResults(prev =>
-                prev.map(r => (r.status === 'pending' ? { ...r, status: 'cancelled' } : r)),
-            )
-        }
-
-        setIsProcessing(false)
     }
 
     const getProgress = () => {

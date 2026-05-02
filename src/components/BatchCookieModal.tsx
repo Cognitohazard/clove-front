@@ -196,6 +196,23 @@ export function BatchCookieModal({ onClose }: BatchCookieModalProps) {
         }
     }
 
+    const copySuccessCookies = async () => {
+        const successCookies = results
+            .filter(r => r.status === 'success')
+            .map(r => r.cookie)
+            .join('\n')
+
+        try {
+            await navigator.clipboard.writeText(successCookies)
+            toast.success('已复制成功的 Cookie', {
+                icon: <Check className='h-4 w-4' />,
+            })
+        } catch (error) {
+            console.error('Failed to copy:', error)
+            toast.error('复制失败')
+        }
+    }
+
     const truncateCookie = (cookie: string, maxLength: number = 40) => {
         if (cookie.length <= maxLength) return cookie
         const start = cookie.substring(0, 20)
@@ -302,17 +319,33 @@ export function BatchCookieModal({ onClose }: BatchCookieModalProps) {
                                     {getCancelledCount() > 0 && `，${getCancelledCount()} 个已取消`}。
                                 </AlertDescription>
                             </Alert>
-                            {getErrorCount() > 0 && (
-                                <Button
-                                    type='button'
-                                    variant='outline'
-                                    size='sm'
-                                    className='w-full'
-                                    onClick={copyFailedCookies}
-                                >
-                                    <Copy className='mr-2 h-4 w-4' />
-                                    复制失败的 Cookie
-                                </Button>
+                            {(getSuccessCount() > 0 || getErrorCount() > 0) && (
+                                <div className='flex gap-2'>
+                                    {getSuccessCount() > 0 && (
+                                        <Button
+                                            type='button'
+                                            variant='outline'
+                                            size='sm'
+                                            className='flex-1'
+                                            onClick={copySuccessCookies}
+                                        >
+                                            <Copy className='mr-2 h-4 w-4' />
+                                            复制成功的 Cookie
+                                        </Button>
+                                    )}
+                                    {getErrorCount() > 0 && (
+                                        <Button
+                                            type='button'
+                                            variant='outline'
+                                            size='sm'
+                                            className='flex-1'
+                                            onClick={copyFailedCookies}
+                                        >
+                                            <Copy className='mr-2 h-4 w-4' />
+                                            复制失败的 Cookie
+                                        </Button>
+                                    )}
+                                </div>
                             )}
                         </>
                     )}

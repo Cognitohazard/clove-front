@@ -23,6 +23,7 @@ export interface OAuthCodeExchange {
   organization_uuid: string;
   code: string;
   pkce_verifier: string;
+  state?: string;
   capabilities?: string[];
 }
 

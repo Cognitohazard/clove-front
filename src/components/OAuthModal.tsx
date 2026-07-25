@@ -30,28 +30,23 @@ export function OAuthModal({ onClose }: OAuthModalProps) {
     const [uuidError, setUuidError] = useState('')
     const [step, setStep] = useState<'input' | 'code'>('input')
     const [pkceVerifier, setPkceVerifier] = useState('')
+    const [oauthState, setOauthState] = useState('')
     const isMobile = useIsMobile()
 
-    // PKCE generation functions
-    const generatePKCE = () => {
-        // Generate random verifier
-        const array = new Uint8Array(32)
-        crypto.getRandomValues(array)
-        const verifier = btoa(String.fromCharCode.apply(null, Array.from(array)))
+    const base64url = (bytes: Uint8Array) =>
+        btoa(String.fromCharCode.apply(null, Array.from(bytes)))
             .replace(/\+/g, '-')
             .replace(/\//g, '_')
             .replace(/=/g, '')
 
-        // Generate challenge
-        const encoder = new TextEncoder()
-        const data = encoder.encode(verifier)
-        return crypto.subtle.digest('SHA-256', data).then(buffer => {
-            const challenge = btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(buffer))))
-                .replace(/\+/g, '-')
-                .replace(/\//g, '_')
-                .replace(/=/g, '')
-            return { verifier, challenge }
-        })
+    const randomToken = () => base64url(crypto.getRandomValues(new Uint8Array(32)))
+
+    const generatePKCE = () => {
+        const verifier = randomToken()
+        const data = new TextEncoder().encode(verifier)
+        return crypto.subtle
+            .digest('SHA-256', data)
+            .then(buffer => ({ verifier, challenge: base64url(new Uint8Array(buffer)) }))
     }
 
     const handleGenerateUrl = async () => {
@@ -67,6 +62,12 @@ export function OAuthModal({ onClose }: OAuthModalProps) {
             const { verifier, challenge } = await generatePKCE()
             setPkceVerifier(verifier)
 
+            // state must be independent of the verifier: it round-trips through the
+            // redirect URL and is shown on the callback page, so reusing the verifier
+            // would publish it and defeat PKCE.
+            const state = randomToken()
+            setOauthState(state)
+
             // Build authorization URL
             const params = new URLSearchParams({
                 response_type: 'code',
@@ -74,7 +75,7 @@ export function OAuthModal({ onClose }: OAuthModalProps) {
                 organization_uuid: formatUUID(organizationUuid),
                 redirect_uri: REDIRECT_URI,
                 scope: 'user:profile user:inference',
-                state: verifier,
+                state,
                 code_challenge: challenge,
                 code_challenge_method: 'S256',
             })
@@ -108,6 +109,9 @@ export function OAuthModal({ onClose }: OAuthModalProps) {
                 organization_uuid: formatUUID(organizationUuid),
                 code: authCode,
                 pkce_verifier: pkceVerifier,
+                // Upstream rejects the exchange without state; a pasted code may
+                // arrive without its "#state" tail.
+                state: oauthState,
                 capabilities:
                     accountType === 'Max' ? ['chat', 'claude_max'] : accountType === 'Pro' ? ['chat', 'claude_pro'] : ['chat'],
             }
